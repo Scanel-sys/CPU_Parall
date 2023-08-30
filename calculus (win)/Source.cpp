@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <vector>
 
+
 struct JobData
 {
     struct JobData volatile * next; 
@@ -258,5 +259,6 @@ DWORD WINAPI thread_entry(void * param)
 
         temp_job = pop_job();
     }
+    ReleaseSemaphore(sema, 1, NULL);
     return 0;
 }

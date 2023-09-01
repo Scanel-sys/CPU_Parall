@@ -3,7 +3,6 @@
 #include <fstream>
 #include <string>
 #include <windows.h>
-#include <vector>
 
 
 struct JobData
@@ -21,8 +20,8 @@ struct JobInfo
 
 struct TaskData
 {
-    unsigned int threads_number;
-    unsigned int number;
+    int threads_number;
+    int number;
 };
 
 
@@ -32,7 +31,7 @@ volatile unsigned int decompositions = 0;
 HANDLE sema;
 volatile struct JobInfo jobs;
 
-
+void init_and_launch_first_job(int number);
 struct JobData pop_job();
 void push_job(struct JobData job);
 struct JobData * joballoc();
@@ -41,65 +40,57 @@ int jobs_size();
 void increase_decomps();
 
 struct TaskData get_task_data(std::string file_name);
+int putout_data(struct TaskData task_data, unsigned int time_counter);
 int putout_task_data(std::string file_name, struct TaskData data);
 int putout_time_data(std::string file_name, unsigned int time_counter);
 
-int file_err(const char* function);
+int err_info(const char* function);
 
-void close_threads(HANDLE * threads, unsigned int threads_number);
+void complete_task(HANDLE * threads, struct TaskData task_data);
 
 DWORD WINAPI thread_entry(void * param);
-
-void count_millisec(HANDLE &thread_to_count);
+int create_threads( HANDLE * threads, int threads_number);
+void close_threads(HANDLE * threads, unsigned int threads_number);
+HANDLE * init_resources_and_alloc_threads(HANDLE * threads, struct TaskData &task_data);
+void free_resources(HANDLE * threads, struct TaskData &task_data);
 
 
 int main()
 {
-    unsigned int time_counter = 0;
     jobs.first = jobs.last = NULL;    
     DWORD started, finished;
     
     struct TaskData task_data = get_task_data("input.txt");
-    HANDLE * threads = (HANDLE *)malloc(sizeof(HANDLE) * task_data.threads_number);
+    if(task_data.number < 0)
+        return -1;
+    
+    HANDLE * threads = init_resources_and_alloc_threads(threads, task_data);
 
-    InitializeCriticalSection(&decomp_section);
-    InitializeCriticalSection(&queue_section);
-    sema = CreateSemaphore(0, 0, task_data.threads_number, 0);
-
-    for(int i = 0; i < task_data.threads_number; i++)
-    {
-        threads[i] = CreateThread(0, 0, thread_entry, NULL, 0, NULL);
-        if(threads[i] == 0)
-        {
-            printf("CreateThread failed. GetLastError(): %u\n", GetLastError());
-            return -1;
-        }
-    }
+    if(create_threads(threads, task_data.threads_number) == -1)
+        return -1;
 
     started = GetTickCount();
-    struct JobData first_job;
-    first_job.n = task_data.number;
-    first_job.k = task_data.number;
-    push_job(first_job);
-    
-    ReleaseSemaphore(sema, 1, NULL);
-    WaitForMultipleObjects(task_data.threads_number, threads, TRUE, INFINITE);
+    complete_task(threads, task_data);
     finished = GetTickCount();
     
     printf("Threads finished\n%u.%u seconds\n", (finished - started) / 1000, (finished - started) % 1000);
     
-    DeleteCriticalSection(&decomp_section);
-    DeleteCriticalSection(&queue_section);
-    CloseHandle(sema);
-    close_threads(threads, task_data.threads_number);
-    free(threads);
-
-    if(putout_task_data("output.txt", task_data) < 0 || putout_time_data("time.txt", finished - started) < 0)
+    free_resources(threads, task_data);
+    if(putout_data(task_data, finished - started) < 0)
         return -1;
 
     return 0;
 }
 
+
+void init_and_launch_first_job(int number)
+{
+    struct JobData first_job;
+    first_job.n = number;
+    first_job.k = number;
+    push_job(first_job);
+    thread_entry((void *)1);
+}
 
 struct JobData pop_job()
 {
@@ -180,12 +171,22 @@ struct TaskData get_task_data(std::string file_name)
     if(!input_file.is_open())
     {
         std::cout << "Seems like file doesnt exist\n";
-        exit; 
+        err_info("read_task_data");
+        output.number = -1;
+        output.threads_number = -1;
+        return output;
     }
 
     input_file >> output.threads_number >> output.number;
     input_file.close();
     return output;
+}
+
+int putout_data(struct TaskData task_data, unsigned int time_counter)
+{
+    if(putout_task_data("output.txt", task_data) < 0 || putout_time_data("time.txt", time_counter) < 0)
+        return err_info("putout_data");
+    return 0;
 }
 
 int putout_task_data(std::string file_name, struct TaskData data)
@@ -196,7 +197,7 @@ int putout_task_data(std::string file_name, struct TaskData data)
     if(!output_file.is_open())
     {
         std::cout << "File exists already? Cant create\n";
-        return file_err("putout_task_datan"); 
+        return err_info("putout_task_datan"); 
     }
     output_file << data.threads_number << '\n' << data.number << '\n' << decompositions;
 
@@ -211,7 +212,7 @@ int putout_time_data(std::string file_name, unsigned int time_counter)
     if(!output_file.is_open())
     {
         std::cout << "File exists already? Cant create\n";
-        return file_err("putout_time_data\n"); 
+        return err_info("putout_time_data\n"); 
     }
     output_file << time_counter;
     output_file.close();
@@ -219,21 +220,25 @@ int putout_time_data(std::string file_name, unsigned int time_counter)
 }
 
 
-int file_err(const char* function) 
+int err_info(const char* function) 
 { 
-    fprintf(stderr, "%s: file r/w error : %d\n", function, GetLastError()); 
+    fprintf(stderr, "%s: error : %d\n", function, GetLastError()); 
     return -1; 
 }
 
-void close_threads(HANDLE * threads, unsigned int threads_number)
+
+void complete_task(HANDLE * threads, struct TaskData task_data)
 {
-    for(int i = 0; i < threads_number; i++)
-        CloseHandle(threads[i]);
+    init_and_launch_first_job(task_data.number);
+    ReleaseSemaphore(sema, task_data.threads_number, NULL);   
+    while(WAIT_OBJECT_0 != WaitForMultipleObjects(task_data.threads_number, threads, TRUE, INFINITE)){}
 }
 
+
 DWORD WINAPI thread_entry(void * param)
-{    
-    WaitForSingleObject(sema, INFINITE);
+{
+    if(*((int *)&param) != 1)
+        WaitForSingleObject(sema, INFINITE);
 
     JobData temp_job = pop_job();
     while(temp_job.k >= 0 && temp_job.n >= 0)
@@ -261,4 +266,42 @@ DWORD WINAPI thread_entry(void * param)
     }
     ReleaseSemaphore(sema, 1, NULL);
     return 0;
+}
+
+int create_threads( HANDLE * threads, int threads_number)
+{
+    for(int i = 0; i < threads_number; i++)
+    {
+        threads[i] = CreateThread(0, 0, thread_entry, NULL, 0, NULL);
+        if(threads[i] == 0)
+        {
+            printf("CreateThread failed. GetLastError(): %u\n", GetLastError());
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void close_threads(HANDLE * threads, unsigned int threads_number)
+{
+    for(int i = 0; i < threads_number; i++)
+        CloseHandle(threads[i]);
+}
+
+HANDLE * init_resources_and_alloc_threads(HANDLE * threads, struct TaskData &task_data)
+{
+    threads = (HANDLE *)malloc(sizeof(HANDLE) * task_data.threads_number);
+    InitializeCriticalSection(&decomp_section);
+    InitializeCriticalSection(&queue_section);
+    sema = CreateSemaphore(0, 1, task_data.threads_number, 0);
+    return threads;
+}
+
+void free_resources(HANDLE * threads, struct TaskData &task_data)
+{
+    DeleteCriticalSection(&decomp_section);
+    DeleteCriticalSection(&queue_section);
+    CloseHandle(sema);
+    close_threads(threads, task_data.threads_number);
+    free(threads);
 }

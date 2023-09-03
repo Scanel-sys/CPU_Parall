@@ -5,12 +5,6 @@
 #include <windows.h>
 #include <vector>
 
-/*
-    TODO:
-        >
-            thread_entry
-*/
-
 
 struct TaskData
 {
@@ -50,15 +44,19 @@ HANDLE thread_gate;
 
 int err_info(const char* function);
 
+void close_handles_free_data(HANDLE * threads, int needable_threads);
 void close_and_free_threads(HANDLE * threads, unsigned int threads_number);
 int create_threads(HANDLE * threads, int threads_number, _In_ LPTHREAD_START_ROUTINE lpStartAddress);
 DWORD WINAPI thread_entry(void * param);
+int count_needable_threads(TaskData & task_data);
 
 struct TaskData read_task_data(std::string file_name);
 int putout_data(struct TaskData task_data, unsigned int time_counter, int * sorted_data);
 int putout_task_data(std::string file_name, struct TaskData task_data, int * sorted_data);
 int putout_time_data(std::string file_name, unsigned int time_counter);
 
+void init_mutex_and_event();
+void init_jobs(TaskData & task_data, int needable_threads, int job_size);
 struct JobData pop_job();
 struct MergeJob pop_2job();
 void push_job(int * job, int size);
@@ -78,53 +76,27 @@ int main()
         return -1;
     else
     {
-        needable_threads = task_data.threads_number;
-        while(needable_threads > 1 && task_data.data_size / needable_threads < 1000)
-            needable_threads--;
+        needable_threads = count_needable_threads(task_data);
         job_size = task_data.data_size / needable_threads;
         msort_jobs.resize(needable_threads + 1);
     }
 
-    for(int i = 0; i < task_data.data_size; i++)
-        std::cout << data[i] << ' ';
-    std::cout << '\n';
-
     HANDLE * threads = (HANDLE *)malloc(sizeof(HANDLE) * needable_threads);
-    int data_start = -job_size; 
 
-    job_mutex = CreateMutex(NULL, FALSE, NULL);
-    thread_gate = CreateEvent(NULL, TRUE, FALSE, NULL);
-
+    init_mutex_and_event();
     if(create_threads(threads, needable_threads, thread_entry) < 0)
         return -1;
 
     started = GetTickCount();
-
-    for(int i = 0; i < needable_threads; i++)
-    {
-        if(i < needable_threads - 2)
-            msort_jobs[i].size = job_size;
-        else
-            msort_jobs[i].size = job_size + task_data.data_size % job_size;
-
-        msort_jobs[i].data = (int *)malloc(sizeof(int) * msort_jobs[i].size);
-        data_start += job_size;
-        for(int z = 0; z < msort_jobs[i].size; z++)
-            msort_jobs[i].data[z] = data[data_start + z];
-    }
-
+    init_jobs(task_data, needable_threads, job_size);
     SetEvent(thread_gate);
-    // thread_entry(NULL);
     while(WAIT_OBJECT_0 != WaitForMultipleObjects(needable_threads, threads, TRUE, INFINITE));
     finished = GetTickCount();
 
     if(putout_data(task_data, finished - started, merge_jobs.first->data) < 0)
         return -1;    
 
-    CloseHandle(job_mutex);
-    CloseHandle(thread_gate);
-    free(merge_jobs.first->data);
-    close_and_free_threads(threads, needable_threads);
+    close_handles_free_data(threads, needable_threads);
     return 0;
 }
 
@@ -135,6 +107,14 @@ int err_info(const char* function)
     return -1; 
 }
 
+
+void close_handles_free_data(HANDLE * threads, int needable_threads)
+{
+    CloseHandle(job_mutex);
+    CloseHandle(thread_gate);
+    free(merge_jobs.first->data);
+    close_and_free_threads(threads, needable_threads);
+}
 
 void close_and_free_threads(HANDLE * threads, unsigned int threads_number)
 {
@@ -178,6 +158,14 @@ DWORD WINAPI thread_entry(void * param)
         push_job(new_job, temp_job.size1 + temp_job.size2);
     }
     return 0;
+}
+
+int count_needable_threads(TaskData & task_data)
+{
+    int output = task_data.threads_number;
+    while(output > 1 && task_data.data_size / output < 1000)
+        output--;
+    return output;
 }
 
 
@@ -247,6 +235,29 @@ int putout_time_data(std::string file_name, unsigned int time_counter)
 }
 
 
+void init_mutex_and_event()
+{
+    job_mutex = CreateMutex(NULL, FALSE, NULL);
+    thread_gate = CreateEvent(NULL, TRUE, FALSE, NULL);
+}
+
+void init_jobs(TaskData & task_data, int needable_threads, int job_size)
+{
+    int data_start = -job_size; 
+    for(int i = 0; i < needable_threads; i++)
+    {
+        if(i < needable_threads - 2)
+            msort_jobs[i].size = job_size;
+        else
+            msort_jobs[i].size = job_size + task_data.data_size % job_size;
+
+        msort_jobs[i].data = (int *)malloc(sizeof(int) * msort_jobs[i].size);
+        data_start += job_size;
+        for(int z = 0; z < msort_jobs[i].size; z++)
+            msort_jobs[i].data[z] = data[data_start + z];
+    }
+}
+
 struct JobData pop_job()
 {
     JobData output;
@@ -258,9 +269,6 @@ struct JobData pop_job()
     {
         output.data = merge_jobs.first->data;
         output.size = merge_jobs.first->size;
-        // output.next = merge_jobs.first->next;
-        // free((void *)merge_jobs.first);
-        // freeing occurs in THREAD_ENTRY func for MERGE_JOBS
         merge_jobs.first = output.next;
     }
     ReleaseMutex(job_mutex);
@@ -360,8 +368,5 @@ int * merge(int * a_part, int a_size, int * b_part, int b_size)
                 buffer[buff_idx++] = b_part[b_idx++];
         }
     }
-    for(int i = 0; i < a_size + b_size; i++)
-        std::cout << buffer[i] << ' ';
-    std::cout << '\n';
     return buffer;
 }

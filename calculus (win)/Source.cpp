@@ -130,6 +130,15 @@ void push_job(struct JobData job)
     LeaveCriticalSection(&queue_section);
 }
 
+struct JobData * joballoc()
+{
+    struct JobData * task = (struct JobData *)malloc(sizeof(struct JobData));
+    task->next = NULL;
+    task->n = 0;
+    task->k = 0;
+    return task;
+}
+
 int jobs_size()
 {
     if(jobs.first == NULL)
@@ -142,15 +151,6 @@ int jobs_size()
         i++;
     }
     return i;
-}
-
-struct JobData * joballoc()
-{
-    struct JobData * task = (struct JobData *)malloc(sizeof(struct JobData));
-    task->next = NULL;
-    task->n = 0;
-    task->k = 0;
-    return task;
 }
 
 

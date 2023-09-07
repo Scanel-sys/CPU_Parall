@@ -20,7 +20,7 @@ struct JobInfo
 
 struct JobData
 {
-    struct JobData * next;
+    volatile struct JobData * next;
     int * data;
     int size;
 };
@@ -57,7 +57,6 @@ int putout_time_data(std::string file_name, unsigned int time_counter);
 
 void init_mutex_and_event();
 void init_jobs(TaskData & task_data, int needable_threads, int job_size);
-struct JobData pop_job();
 struct MergeJob pop_2job();
 void push_job(int * job, int size);
 struct JobData * joballoc();
@@ -258,22 +257,6 @@ void init_jobs(TaskData & task_data, int needable_threads, int job_size)
     }
 }
 
-struct JobData pop_job()
-{
-    JobData output;
-    output.data = NULL;
-    output.next = NULL;
-    output.size = -1;
-    WaitForSingleObject(job_mutex, INFINITE);
-    if(merge_jobs.first != NULL)
-    {
-        output.data = merge_jobs.first->data;
-        output.size = merge_jobs.first->size;
-        merge_jobs.first = output.next;
-    }
-    ReleaseMutex(job_mutex);
-    return output;
-}
 
 struct MergeJob pop_2job()
 {

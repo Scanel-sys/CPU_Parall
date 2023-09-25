@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
 
 	pthread_mutex_lock(&get_id_mutex);
 
-	
+
 	for (i = 0; i < 5; i++)
         pthread_create(&threads[i], 0, thread_entry, NULL);
 
@@ -61,7 +61,7 @@ int main(int argc, char* argv[]) {
 	end_time = working_time + start_time;
 
 	pthread_mutex_unlock(&get_id_mutex);
-    
+
 	usleep((working_time + status_time) * 1000);
 
 	close_handles();
@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
 	free(forks);
 	for (unsigned int i = 0; i < 5; i++)
         printf("Phil %d changed his status %d times\n", i + 1, freq[i]);
-	
+
     return 0;
 }
 
@@ -109,20 +109,20 @@ void start_eating(int id) {
 }
 
 void change_status(bool* eating) {
-	if (*eating == false) 
+	if (*eating == false)
         *eating = true;
-	else 
+	else
         *eating = false;
 }
 
 bool is_time_end() {
-	if (clock_to_ml() < end_time) 
+	if (clock_to_ml() < end_time)
         return false;
-	else 
+	else
         return true;
 }
 
-void close_handles() 
+void close_handles()
 {
 	for (unsigned i = 0; i < 5; i++)
     {
@@ -132,7 +132,7 @@ void close_handles()
 	pthread_mutex_destroy(&get_id_mutex);
 }
 
-void release_forks(int max_fork, int min_fork) 
+void release_forks(int max_fork, int min_fork)
 {
 	pthread_mutex_unlock(&forks[max_fork]);
 	pthread_mutex_unlock(&forks[min_fork]);
@@ -147,13 +147,13 @@ void * thread_entry(void* params)
 	bool eating = false;
 
 	while (!is_time_end()) {
-		if (eating == false) 
+		if (eating == false)
         {
 			change_status(&eating);
 			start_eating(id);
 			printf_with_mutex(clock_to_ml(), id + 1, actions[0]);
 		}
-		else 
+		else
         {
 			change_status(&eating);
 			printf_with_mutex(clock_to_ml(), id + 1, actions[1]);
@@ -164,7 +164,7 @@ void * thread_entry(void* params)
 	return 0;
 }
 
-double clock_to_ml() 
+double clock_to_ml()
 {
 	return clock() * 100000 / CLOCKS_PER_SEC ;
 }

@@ -21,7 +21,8 @@ struct JobInfo
 struct JobData
 {
     volatile struct JobData* next;
-    int* data;
+    int data_start_index;
+    int data_end_index;
     int size;
     int idx;
 };
@@ -29,15 +30,16 @@ struct JobData
 struct MergeJob
 {
     int jobs_amount;
-    int* data1;
+    int data1_start;
     int size1;
-    int* data2;
+    int data2_start;
     int size2;
 };
 
-int * data = NULL;
+int* data = NULL;
+int* buffer = NULL;
 
-JobData * msort_first_jobs = NULL;
+JobData* msort_first_jobs = NULL;
 struct JobInfo merge_jobs;
 
 HANDLE job_mutex;
@@ -59,20 +61,21 @@ int putout_time_data(std::string file_name, unsigned int time_counter);
 void init_mutex_and_event();
 void init_jobs(TaskData& task_data, int needable_threads, int job_size);
 struct MergeJob pop_2job();
-void push_job(int* job, int size);
+void push_job(int job_start, int size);
 struct JobData* joballoc();
 
-void msort(int* array, int l, int r);
-int* merge(int* a_part, int a_size, int* b_part, int b_size);
+void msort(int l, int r);
+void merge(int a_start, int a_size, int b_start, int b_size);
 
+struct TaskData task_data;
 
 int main()
 {
     int needable_threads, job_size;
     DWORD started, finished;
-    struct TaskData task_data = read_task_data("input.txt");
+    task_data = read_task_data("input.txt");
 
-    if (task_data.data_size < 0)
+    if (task_data.data_size <= 0)
         return -1;
     else
     {
@@ -93,7 +96,7 @@ int main()
     while (WAIT_OBJECT_0 != WaitForMultipleObjects(needable_threads, threads, TRUE, INFINITE));
     finished = GetTickCount();
 
-    if (putout_data(task_data, finished - started, merge_jobs.first->data) < 0)
+    if (putout_data(task_data, finished - started, data) < 0)
         return -1;
 
     close_handles_free_data(threads, needable_threads);
@@ -112,7 +115,8 @@ void close_handles_free_data(HANDLE* threads, int needable_threads)
 {
     CloseHandle(job_mutex);
     CloseHandle(thread_gate);
-    free(merge_jobs.first->data);
+    free(data);
+    free(buffer);
     close_and_free_threads(threads, needable_threads);
 }
 
@@ -142,8 +146,8 @@ DWORD WINAPI thread_entry(void* param)
     int idx = *(int*)(&param);
     WaitForSingleObject(thread_gate, INFINITE);
 
-    msort(msort_first_jobs[idx].data, 0, msort_first_jobs[idx].size);
-    push_job(msort_first_jobs[idx].data, msort_first_jobs[idx].size);
+    msort(msort_first_jobs[idx].data_start_index, msort_first_jobs[idx].size);
+    push_job(msort_first_jobs[idx].data_start_index, msort_first_jobs[idx].size);
 
     while (1)
     {
@@ -152,10 +156,8 @@ DWORD WINAPI thread_entry(void* param)
         if (temp_job.jobs_amount < 2)
             break;
 
-        int* new_job = merge(temp_job.data1, temp_job.size1, temp_job.data2, temp_job.size2);
-        free(temp_job.data1);
-        free(temp_job.data2);
-        push_job(new_job, temp_job.size1 + temp_job.size2);
+        merge(temp_job.data1_start, temp_job.size1, temp_job.data2_start, temp_job.size2);
+        push_job(temp_job.data1_start, temp_job.size1 + temp_job.size2);
     }
     return 0;
 }
@@ -186,7 +188,8 @@ struct TaskData read_task_data(std::string file_name)
 
     input_file >> output.threads_number >> output.data_size;
 
-    data = (int *)malloc(output.data_size * sizeof(int));
+    data = (int*)malloc(output.data_size * sizeof(int));
+    buffer = (int*)malloc(output.data_size * sizeof(int));
     for (int i = 0; i < output.data_size; i++)
         input_file >> data[i];
 
@@ -246,15 +249,13 @@ void init_jobs(TaskData& task_data, int needable_threads, int job_size)
     int data_start = -job_size;
     for (int i = 0; i < needable_threads; i++)
     {
+        data_start += job_size;
         if (i < needable_threads - 2)
             msort_first_jobs[i].size = job_size;
         else
             msort_first_jobs[i].size = job_size + task_data.data_size % job_size;
 
-        msort_first_jobs[i].data = (int*)malloc(sizeof(int) * msort_first_jobs[i].size);
-        data_start += job_size;
-        for (int z = 0; z < msort_first_jobs[i].size; z++)
-            msort_first_jobs[i].data[z] = data[data_start + z];
+        msort_first_jobs[i].data_start_index = data_start;
     }
 }
 
@@ -263,30 +264,58 @@ struct MergeJob pop_2job()
 {
     MergeJob output;
     output.jobs_amount = 0;
+    volatile JobData* temp_job_data1 = NULL;
+    volatile JobData* temp_job_data2 = NULL;
+    volatile JobData* prev_data1 = NULL;
+    volatile JobData* prev_data2 = NULL;
     WaitForSingleObject(job_mutex, INFINITE);
-    if (merge_jobs.first != NULL)
+    temp_job_data1 = merge_jobs.first;
+    if (temp_job_data1 != NULL)
     {
         output.jobs_amount = 1;
-        if (merge_jobs.first->next != NULL)
+        bool jobs_checked = false;
+        while (!jobs_checked)
         {
-            output.jobs_amount = 2;
-            output.data1 = merge_jobs.first->data;
-            output.size1 = merge_jobs.first->size;
-            output.data2 = merge_jobs.first->next->data;
-            output.size2 = merge_jobs.first->next->size;
-            merge_jobs.first = merge_jobs.first->next->next;
+            prev_data2 = temp_job_data2;
+            temp_job_data2 = temp_job_data1->next;
+            while (temp_job_data2 != NULL && temp_job_data1->data_end_index != temp_job_data2->data_start_index)
+                temp_job_data2 = temp_job_data2->next;
+
+            if (temp_job_data2 != NULL)
+            {
+                output.jobs_amount = 2;
+                output.data1_start = temp_job_data1->data_start_index;
+                output.size1 = temp_job_data1->size;
+                output.data2_start = temp_job_data2->data_start_index;
+                output.size2 = temp_job_data2->size;
+                merge_jobs.first = merge_jobs.first->next->next;
+
+                prev_data1->next = prev_data1->next->next;
+                prev_data2->next = prev_data2->next->next;
+                free((void*)temp_job_data1);
+                free((void*)temp_job_data2);
+
+                jobs_checked = true;
+            }
+            else
+            {
+                prev_data1 = temp_job_data1;
+                temp_job_data1 = temp_job_data1->next;
+                if (temp_job_data1 == NULL)
+                    jobs_checked = true;
+            }
         }
     }
     ReleaseMutex(job_mutex);
     return output;
 }
 
-void push_job(int* job, int size)
+void push_job(int job_start, int size)
 {
     struct JobData* new_job = joballoc();
-    new_job->data = (int*)malloc(sizeof(int) * size);
-    memcpy(new_job->data, job, size * sizeof(int));
+    new_job->data_start_index = job_start;
     new_job->size = size;
+    new_job->data_end_index = new_job->data_start_index + new_job->size;
     WaitForSingleObject(job_mutex, INFINITE);
     if (merge_jobs.first == NULL)
     {
@@ -308,51 +337,47 @@ struct JobData* joballoc()
 {
     struct JobData* task = (struct JobData*)malloc(sizeof(struct JobData));
     task->next = NULL;
-    task->data = NULL;
+    task->data_start_index = 0;
     task->size = 0;
     task->idx = 0;
     return task;
 }
 
 
-void msort(int* array, int l, int r)
+void msort(int l, int r)
 {
-    int l_idx = l;
-    int r_idx = r / 2 + l_idx / 2;
+    int r_idx = r / 2 + l / 2 + (r % 2 + l % 2) / 2;
 
     if (l + 1 < r)
     {
-        msort(array, 0, r_idx);
-        msort(array + r_idx, 0, r - r_idx);
+        msort(l, r_idx);
+        msort(r_idx, r);
     }
 
-    int* new_job = merge(array, r_idx - l_idx, array + r_idx, r - r_idx);
-    memcpy(array, new_job, sizeof(int) * r);
-    free(new_job);
+    merge(l, r_idx - l, r_idx, r - r_idx);
+    memcpy(data + l, buffer + l, sizeof(int) * (r - l));
 }
 
-int* merge(int* a_part, int a_size, int* b_part, int b_size)
+void merge(int a_start, int a_size, int b_start, int b_size)
 {
-    int* buffer = (int*)malloc(sizeof(int) * (a_size + b_size));
     int a_idx = 0, b_idx = 0, buff_idx = 0;
     while (buff_idx < a_size + b_size)
     {
         if (a_idx == a_size)
             while (b_idx < b_size)
-                buffer[buff_idx++] = b_part[b_idx++];
+                buffer[a_start + buff_idx++] = data[b_start + b_idx++];
 
         else if (b_idx == b_size)
             while (a_idx < a_size)
-                buffer[buff_idx++] = a_part[a_idx++];
+                buffer[a_start + buff_idx++] = data[a_start + a_idx++];
 
         else
         {
-            if (a_part[a_idx] <= b_part[b_idx])
-                buffer[buff_idx++] = a_part[a_idx++];
+            if (data[a_start + a_idx] <= data[b_start + b_idx])
+                buffer[a_start + buff_idx++] = data[a_start + a_idx++];
 
             else
-                buffer[buff_idx++] = b_part[b_idx++];
+                buffer[a_start + buff_idx++] = data[b_start + b_idx++];
         }
     }
-    return buffer;
 }

@@ -5,16 +5,21 @@
 #include <semaphore.h>
 #include <unistd.h>
 
+#include <sys/time.h>
+#include <unistd.h>
+
+#include <chrono>
+#include <thread>
+
 typedef struct min_max_forks_ {
 	int min_fork, max_fork;
 } min_max_forks;
 
 int cur_id = 0;
-int status_time;
-clock_t end_time = 0;
-clock_t start_time;
+unsigned long long status_time;
+unsigned long long end_time = 0;
+unsigned long long start_time;
 
-const char* actions[2] = { "T->E","E->T" };
 int freq[5] = { 0,0,0,0,0 };
 min_max_forks phil_forks[5];
 
@@ -22,6 +27,7 @@ pthread_mutex_t stdout_mutex;
 pthread_mutex_t get_id_mutex;
 pthread_mutex_t * forks;
 
+unsigned long long int timeInMilliseconds(void);
 void define_min_max_forks();
 void printf_with_mutex(int currtime, int id, const char* action);
 void start_eating(int id);
@@ -30,7 +36,6 @@ bool is_time_end();
 void close_handles();
 void release_forks(int max_fork, int min_fork);
 void * thread_entry(void* params);
-double clock_to_ml();
 
 int main(int argc, char* argv[]) {
 	int working_time = atoi(argv[1]);
@@ -42,11 +47,8 @@ int main(int argc, char* argv[]) {
 	pthread_t * threads = (pthread_t *)malloc(sizeof(pthread_t) * 5 );
 	forks = (pthread_mutex_t *)malloc(5 * sizeof(pthread_mutex_t));
 
-
 	for (i = 0; i < 5; i++)
-    {
 		pthread_mutex_init(&forks[i], 0);
-    }
 
 	pthread_mutex_init(&stdout_mutex, 0);
 	pthread_mutex_init(&get_id_mutex, 0);
@@ -57,12 +59,13 @@ int main(int argc, char* argv[]) {
 	for (i = 0; i < 5; i++)
         pthread_create(&threads[i], 0, thread_entry, NULL);
 
-	start_time = clock_to_ml();
+	start_time = timeInMilliseconds();
 	end_time = working_time + start_time;
 
 	pthread_mutex_unlock(&get_id_mutex);
 
-	usleep((working_time + status_time) * 1000);
+	for(i = 0; i < 5; i++)
+        pthread_join(threads[i], 0);
 
 	close_handles();
     free(threads);
@@ -116,7 +119,7 @@ void change_status(bool* eating) {
 }
 
 bool is_time_end() {
-	if (clock_to_ml() < end_time)
+	if (timeInMilliseconds() < end_time)
         return false;
 	else
         return true;
@@ -125,9 +128,8 @@ bool is_time_end() {
 void close_handles()
 {
 	for (unsigned i = 0; i < 5; i++)
-    {
 		pthread_mutex_destroy(&forks[i]);
-    }
+    
 	pthread_mutex_destroy(&stdout_mutex);
 	pthread_mutex_destroy(&get_id_mutex);
 }
@@ -151,20 +153,28 @@ void * thread_entry(void* params)
         {
 			change_status(&eating);
 			start_eating(id);
-			printf_with_mutex(clock_to_ml(), id + 1, actions[0]);
+			printf_with_mutex(timeInMilliseconds() - start_time, id + 1, "T->E");
 		}
 		else
         {
 			change_status(&eating);
-			printf_with_mutex(clock_to_ml(), id + 1, actions[1]);
+			printf_with_mutex(timeInMilliseconds() - start_time, id + 1, "E->T");
 			release_forks(phil_forks[id].max_fork, phil_forks[id].min_fork);
 		}
+		// std::this_thread::sleep_for(std::chrono::milliseconds(status_time));
 		usleep(status_time * 1000);
+	}
+	if(eating == true)
+	{
+		change_status(&eating);
+		printf_with_mutex(timeInMilliseconds() - start_time, id + 1, "E->T");
+		release_forks(phil_forks[id].max_fork, phil_forks[id].min_fork);
 	}
 	return 0;
 }
 
-double clock_to_ml()
-{
-	return clock() * 100000 / CLOCKS_PER_SEC ;
+unsigned long long int timeInMilliseconds(void) {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (((unsigned long long int)tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
 }
